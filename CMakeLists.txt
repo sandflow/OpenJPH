@@ -232,7 +232,7 @@ install(FILES "${CMAKE_BINARY_DIR}/${PROJECT_NAME}.pc"
 )
 
 ################################################################################################
-# Testing (OJPH_BUILD_TESTS)
+# Testing and fuzzing (OJPH_BUILD_TESTS)
 ################################################################################################
 
 if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME AND OJPH_BUILD_TESTS)
@@ -241,15 +241,10 @@ if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME AND OJPH_BUILD_TESTS)
 endif()
 
 ################################################################################################
-# Fuzzing
+# Testing and fuzzing (OJPH_BUILD_FUZZER)
 ################################################################################################
 
 if(OJPH_BUILD_FUZZER)
-  if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    message(FATAL_ERROR "Fuzzing requires a Clang toolchain.")
-  endif()
-
-  message(STATUS "Building fuzzer target")
-
   add_subdirectory(fuzzing)
 endif()
+
