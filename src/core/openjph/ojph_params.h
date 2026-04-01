@@ -187,6 +187,19 @@ namespace ojph {
      */
     void set_irrev_quant(ui32 comp_idx, float delta);
 
+    /**
+     * @brief Set lossy quantization using Q-factor (1-100).
+     *
+     * Q-factor 1 is lowest quality, 100 is highest quality.
+     * Quantization step sizes are derived using visual weighting factors
+     * per the HTJ2K white paper (https://htj2k.com/wp-content/uploads/white-paper.pdf).
+     * This is mutually exclusive with set_irrev_quant(float delta).
+     * For best results, use with colour_transform enabled for 3-component images.
+     *
+     * @param q  Quality factor in the range [1, 100]
+     */
+    void set_irrev_quant_from_qfactor(int q);
+
   private:
     local::param_qcd* state;
   };

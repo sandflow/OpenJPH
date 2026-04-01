@@ -422,6 +422,15 @@ namespace ojph {
     state->set_delta(comp_idx, delta);
   }
 
+  //////////////////////////////////////////////////////////////////////////
+  void param_qcd::set_irrev_quant_from_qfactor(int q)
+  {
+    if (q < 1 || q > 100)
+      OJPH_ERROR(0x00050001,
+        "Q-factor must be in the range [1, 100]; got %d", q);
+    state->set_qfactor(q);
+  }
+
   ////////////////////////////////////////////////////////////////////////////
   //
   //
@@ -1194,7 +1203,9 @@ namespace ojph {
             qcd_component < 3 ? employing_color_transform : false);
         else if (qcd_wavelet_kern == param_cod::DWT_IRV97)
         {
-          if (this->base_delta == -1.0f)
+          this->qf_bit_depth = qcd_bit_depth;
+          this->qf_comp = 0;
+          if (q_factor < 0 && this->base_delta == -1.0f)
             this->base_delta = 1.0f / (float)(1 << qcd_bit_depth);
           set_irrev_quant(qcd_num_decompositions);
         }
@@ -1261,6 +1272,34 @@ namespace ojph {
             assert(0);
         }
       }
+
+      // When Q-factor is set for a 3-component image, create per-component
+      // QCC markers for Cb (comp 1) and Cr (comp 2) with their respective
+      // visual weighting factors, matching OpenHTJ2K behaviour.
+      if (q_factor >= 0 && num_comps >= 3)
+      {
+        bool employing_ycc = cod.is_employing_color_transform();
+        if (employing_ycc)
+        {
+          for (ui32 c = 1; c <= 2; ++c)
+          {
+            const param_cod *cp = cod.get_coc(c);
+            if (cp->get_wavelet_kern() != param_cod::DWT_IRV97)
+              continue;
+
+            param_qcd *qp = get_qcc(c);
+            if (qp == this)                // no QCC yet -- create one
+              qp = add_qcc_object(c);
+
+            ui32 nd = cp->get_num_decompositions();
+            qp->num_subbands  = 1 + 3 * nd;
+            qp->q_factor      = q_factor;
+            qp->qf_bit_depth  = siz.get_bit_depth(c);
+            qp->qf_comp       = (int)c;
+            qp->set_irrev_quant(nd);
+          }
+        }
+      }
     }
 
     //////////////////////////////////////////////////////////////////////////
@@ -1321,11 +1360,118 @@ namespace ojph {
     }
 
     //////////////////////////////////////////////////////////////////////////
+    // Encodes a quantization step size value (>=1.0) as a 16-bit
+    // exponent/mantissa pair per the JPEG2000 scalar quantization format.
+    static ui16 qf_encode_step(double fval)
+    {
+      int e = 0;
+      while (fval < 1.0) { e++; fval *= 2.0; }
+      int m = (int)floor((fval - 1.0) * (double)(1 << 11) + 0.5);
+      if (m >= (1 << 11)) { m = 0; e--; }
+      if (e > 31) { e = 31; m = 0; }
+      if (e < 0) { e = 0; m = (1 << 11) - 1; }
+      return (ui16)((e << 11) | m);
+    }
+
+    //////////////////////////////////////////////////////////////////////////
     void param_qcd::set_irrev_quant(ui32 num_decomps)
     {
       int guard_bits = 1;
       Sqcd = (ui8)((guard_bits<<5)|0x2);//one guard bit, scalar quantization
       int s = 0;
+
+      if (q_factor >= 0)
+      {
+        // Q-factor quantization per HTJ2K white paper.
+        // Visual weighting factors (square roots) for Y, Cb, Cr components
+        // in 4:4:4 YCC ordering (index 0 = finest detail HH subband).
+        static const double W_b[3][15] = {
+          // Y:
+          {0.0901, 0.2758, 0.2758, 0.7018, 0.8378, 0.8378,
+           1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000,
+           1.0000, 1.0000, 1.0000},
+          // Cb:
+          {0.0263, 0.0863, 0.0863, 0.1362, 0.2564, 0.2564,
+           0.3346, 0.4691, 0.4691, 0.5444, 0.6523, 0.6523,
+           0.7078, 0.7797, 0.7797},
+          // Cr:
+          {0.0773, 0.1835, 0.1835, 0.2598, 0.4130, 0.4130,
+           0.5040, 0.6464, 0.6464, 0.7220, 0.8254, 0.8254,
+           0.8769, 0.9424, 0.9424}
+        };
+        // Squared Euclidean norm of multi-component synthesis operator
+        // (sqrt of contribution of Y/Cb/Cr to RGB reconstruction).
+        static const double G_c_sqrt[3] = {1.7321, 1.8051, 1.5734};
+
+        int c = (qf_comp >= 0 && qf_comp <= 2) ? qf_comp : 0;
+        const double *w_b_tab = W_b[c];
+        double G_c = G_c_sqrt[c];
+
+        // Map q-factor to M_Q (distortion scaling)
+        double M_Q;
+        if (q_factor < 50)
+          M_Q = 50.0 / (double)q_factor;
+        else
+          M_Q = 2.0 * (1.0 - (double)q_factor / 100.0);
+
+        // Smooth alpha interpolation between two threshold points
+        const int t0 = 65, t1 = 97;
+        const double alpha_T0 = 0.04, alpha_T1 = 0.10;
+        const double M_T0 = 2.0 * (1.0 - t0 / 100.0);
+        const double M_T1 = 2.0 * (1.0 - t1 / 100.0);
+        double alpha_Q = alpha_T0, qfactor_power = 1.0;
+        if (q_factor >= t1) {
+          qfactor_power = 0.0;
+          alpha_Q = alpha_T1;
+        } else if (q_factor > t0) {
+          qfactor_power = (log(M_T1) - log(M_Q)) / (log(M_T1) - log(M_T0));
+          alpha_Q = alpha_T1 * pow(alpha_T0 / alpha_T1, qfactor_power);
+        }
+
+        // eps0: white-noise floor scaled by bit depth
+        ui32 bd = (qf_bit_depth > 0) ? qf_bit_depth : 8u;
+        double eps0 = sqrt(0.5) / (double)(1u << bd);
+        double delta_Q = alpha_Q * M_Q;
+        // delta_ref always uses G_c_sqrt[0] (Y/luma reference)
+        double delta_ref = delta_Q * G_c_sqrt[0] + eps0;
+
+        // LL subband: w_b = 1.0 per white paper; sqrt_wmse = gain_l^2
+        {
+          double gain_l = (double)sqrt_energy_gains::get_gain_l(num_decomps,
+                                                                false);
+          SPqcd.u16[s++] = qf_encode_step(delta_ref / (gain_l * gain_l * G_c));
+        }
+
+        // Detail subbands: loop d from num_decomps..1
+        // OpenHTJ2K band ordering: index 3*(d-1)+{0=HH,1=LH,2=HL}
+        // maps to W_b index (0=finest HH, increasing toward coarser).
+        for (ui32 d = num_decomps; d > 0; --d)
+        {
+          double gain_l = (double)sqrt_energy_gains::get_gain_l(d, false);
+          double gain_h = (double)sqrt_energy_gains::get_gain_h(d - 1, false);
+          int wb_base = (int)(d - 1) * 3;
+
+          double w_hl, w_lh, w_hh;
+          w_hl = (wb_base + 2 < 15) ? pow(w_b_tab[wb_base + 2], qfactor_power)
+                                     : 1.0;
+          w_lh = (wb_base + 1 < 15) ? pow(w_b_tab[wb_base + 1], qfactor_power)
+                                     : 1.0;
+          w_hh = (wb_base + 0 < 15) ? pow(w_b_tab[wb_base + 0], qfactor_power)
+                                     : 1.0;
+
+          double sqrt_wmse_hlh = gain_l * gain_h;
+          double sqrt_wmse_hh  = gain_h * gain_h;
+
+          SPqcd.u16[s++] = qf_encode_step(
+            delta_ref / (sqrt_wmse_hlh * w_hl * G_c)); // HL
+          SPqcd.u16[s++] = qf_encode_step(
+            delta_ref / (sqrt_wmse_hlh * w_lh * G_c)); // LH
+          SPqcd.u16[s++] = qf_encode_step(
+            delta_ref / (sqrt_wmse_hh  * w_hh * G_c)); // HH
+        }
+        return;
+      }
+
       float gain_l = sqrt_energy_gains::get_gain_l(num_decomps, false);
       float delta_b = base_delta / (gain_l * gain_l);
       int exp = 0, mantissa;

@@ -709,6 +709,7 @@ namespace ojph {
       void check_validity(const param_siz& siz, const param_cod& cod);
       void set_delta(float delta) { base_delta = delta; }
       void set_delta(ui32 comp_idx, float delta);
+      void set_qfactor(int q) { q_factor = q; }
       ui32 get_num_guard_bits() const;
       ui32 get_MAGB() const;
       ui32 get_Kmax(const param_dfs* dfs, ui32 num_decompositions,
@@ -737,6 +738,9 @@ namespace ojph {
         memset(&SPqcd, 0, sizeof(SPqcd));
         num_subbands = 0;
         base_delta = -1.0f;
+        q_factor = -1;
+        qf_bit_depth = 0;
+        qf_comp = 0;
         enabled = true;
         next = NULL;
         this->top_qcd = top_qcd;
@@ -779,6 +783,9 @@ namespace ojph {
       ui32 num_subbands;  // number of subbands
       float base_delta;   // base quantization step size -- all other
                           // step sizes are derived from it.
+      int q_factor;       // HTJ2K Q-factor (1-100), or -1 if not used
+      ui32 qf_bit_depth;  // bit depth used for Q-factor eps0 calculation
+      int qf_comp;        // component index for Q-factor (0=Y/Gray, 1=Cb, 2=Cr)
       bool enabled;       // enabled if two, and ignored if false
       param_qcd *next;    // pointer to create chains of qcc marker segments
       param_qcd *top_qcd; // pointer to the top QCD (this is the default)

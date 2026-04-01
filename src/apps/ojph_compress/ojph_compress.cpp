@@ -361,7 +361,7 @@ static
 bool get_arguments(int argc, char *argv[], char *&input_filename,
                    char *&output_filename, char *&progression_order,
                    char *&profile_string, ojph::ui32 &num_decompositions,
-                   float &quantization_step, bool &reversible,
+                   float &quantization_step, int &q_factor, bool &reversible,
                    int &employ_color_transform,
                    const int max_num_precincts, int &num_precincts,
                    ojph::size *precinct_size, ojph::size& block_size,
@@ -383,6 +383,7 @@ bool get_arguments(int argc, char *argv[], char *&input_filename,
   interpreter.reinterpret("-profile", profile_string);
   interpreter.reinterpret("-num_decomps", num_decompositions);
   interpreter.reinterpret("-qstep", quantization_step);
+  interpreter.reinterpret("-qfactor", q_factor);
   interpreter.reinterpret("-reversible", reversible);
   interpreter.reinterpret_to_bool("-colour_trans", employ_color_transform);
   interpreter.reinterpret("-num_comps", num_comps);
@@ -494,6 +495,7 @@ int main(int argc, char * argv[]) {
   char *com_string = NULL;
   ojph::ui32 num_decompositions = 5;
   float quantization_step = -1.0f;
+  int q_factor = -1;
   bool reversible = false;
   int employ_color_transform = -1;
 
@@ -538,6 +540,10 @@ int main(int argc, char * argv[]) {
     "               compression; quantization steps size for all subbands are\n"
     "               derived from this value. {The default value for 8bit\n"
     "               images is 0.0039}\n"
+    " -qfactor      (1...100) quality factor for lossy compression;\n"
+    "               a value of 1 gives lowest quality and 100 gives highest.\n"
+    "               Based on the HTJ2K white paper visual weighting.\n"
+    "               Mutually exclusive with -qstep.\n"
     " -reversible   <true | false> If this is 'false', an irreversible or\n"
     "               lossy compression is employed, using the 9/7 wavelet\n"
     "               transform; if 'true', a reversible compression is\n"
@@ -618,7 +624,8 @@ int main(int argc, char * argv[]) {
   }
   if (!get_arguments(argc, argv, input_filename, output_filename,
                      prog_order, profile_string, num_decompositions,
-                     quantization_step, reversible, employ_color_transform,
+                     quantization_step, q_factor, reversible,
+                     employ_color_transform,
                      max_precinct_sizes, num_precincts, precinct_size,
                      block_size, dims, image_offset, tile_size, tile_offset,
                      max_num_comps, num_components,
@@ -680,11 +687,18 @@ int main(int argc, char * argv[]) {
         cod.set_progression_order(prog_order);
         cod.set_color_transform(false);
         cod.set_reversible(reversible);
-        if (!reversible && quantization_step != -1.0f)
-          codestream.access_qcd().set_irrev_quant(quantization_step);
+        if (!reversible && (quantization_step != -1.0f || q_factor != -1)) {
+          if (quantization_step != -1.0f && q_factor != -1)
+            OJPH_WARN(0x01000099, "-qstep and -qfactor are mutually exclusive;"
+              " -qfactor takes precedence\n");
+          if (q_factor != -1)
+            codestream.access_qcd().set_irrev_quant_from_qfactor(q_factor);
+          else
+            codestream.access_qcd().set_irrev_quant(quantization_step);
+        }
         if (profile_string[0] != '\0')
           codestream.set_profile(profile_string);
-        codestream.set_tilepart_divisions(tileparts_at_resolutions, 
+        codestream.set_tilepart_divisions(tileparts_at_resolutions,
                                           tileparts_at_components);
         codestream.request_tlm_marker(tlm_marker);
 
@@ -736,14 +750,21 @@ int main(int argc, char * argv[]) {
         else
           cod.set_color_transform(employ_color_transform == 1);
         cod.set_reversible(reversible);
-        if (!reversible && quantization_step != -1.0f)
-          codestream.access_qcd().set_irrev_quant(quantization_step);
+        if (!reversible && (quantization_step != -1.0f || q_factor != -1)) {
+          if (quantization_step != -1.0f && q_factor != -1)
+            OJPH_WARN(0x01000099, "-qstep and -qfactor are mutually exclusive;"
+              " -qfactor takes precedence\n");
+          if (q_factor != -1)
+            codestream.access_qcd().set_irrev_quant_from_qfactor(q_factor);
+          else
+            codestream.access_qcd().set_irrev_quant(quantization_step);
+        }
         codestream.set_planar(false);
         if (profile_string[0] != '\0')
           codestream.set_profile(profile_string);
-        codestream.set_tilepart_divisions(tileparts_at_resolutions, 
+        codestream.set_tilepart_divisions(tileparts_at_resolutions,
                                           tileparts_at_components);
-        codestream.request_tlm_marker(tlm_marker);          
+        codestream.request_tlm_marker(tlm_marker);
 
         if (dims.w != 0 || dims.h != 0)
           OJPH_WARN(0x01000011,
@@ -817,12 +838,19 @@ int main(int argc, char * argv[]) {
         }
         cod.set_reversible(reversible);
         if (!reversible) {
-          const float min_step = 1.0f / 16384.0f;
-          if (quantization_step == -1.0f)
-            quantization_step = min_step;
-          else
-            quantization_step = ojph_max(quantization_step, min_step);
-          codestream.access_qcd().set_irrev_quant(quantization_step);
+          if (quantization_step != -1.0f && q_factor != -1)
+            OJPH_WARN(0x01000099, "-qstep and -qfactor are mutually exclusive;"
+              " -qfactor takes precedence\n");
+          if (q_factor != -1) {
+            codestream.access_qcd().set_irrev_quant_from_qfactor(q_factor);
+          } else {
+            const float min_step = 1.0f / 16384.0f;
+            if (quantization_step == -1.0f)
+              quantization_step = min_step;
+            else
+              quantization_step = ojph_max(quantization_step, min_step);
+            codestream.access_qcd().set_irrev_quant(quantization_step);
+          }
         }
 
         // Note: Even if only ALL_COMPS is set to 
@@ -892,12 +920,19 @@ int main(int argc, char * argv[]) {
         else
           cod.set_color_transform(employ_color_transform == 1);
         cod.set_reversible(reversible);
-        if (!reversible && quantization_step != -1)
-          codestream.access_qcd().set_irrev_quant(quantization_step);
+        if (!reversible && (quantization_step != -1.0f || q_factor != -1)) {
+          if (quantization_step != -1.0f && q_factor != -1)
+            OJPH_WARN(0x01000099, "-qstep and -qfactor are mutually exclusive;"
+              " -qfactor takes precedence\n");
+          if (q_factor != -1)
+            codestream.access_qcd().set_irrev_quant_from_qfactor(q_factor);
+          else
+            codestream.access_qcd().set_irrev_quant(quantization_step);
+        }
         codestream.set_planar(false);
         if (profile_string[0] != '\0')
           codestream.set_profile(profile_string);
-        codestream.set_tilepart_divisions(tileparts_at_resolutions, 
+        codestream.set_tilepart_divisions(tileparts_at_resolutions,
                                           tileparts_at_components);
         codestream.request_tlm_marker(tlm_marker);
 
@@ -977,14 +1012,21 @@ int main(int argc, char * argv[]) {
             "the next component;  this requires buffering components outside"
             " of the OpenJPH library");
         cod.set_reversible(reversible);
-        if (!reversible && quantization_step != -1.0f)
-          codestream.access_qcd().set_irrev_quant(quantization_step);
+        if (!reversible && (quantization_step != -1.0f || q_factor != -1)) {
+          if (quantization_step != -1.0f && q_factor != -1)
+            OJPH_WARN(0x01000099, "-qstep and -qfactor are mutually exclusive;"
+              " -qfactor takes precedence\n");
+          if (q_factor != -1)
+            codestream.access_qcd().set_irrev_quant_from_qfactor(q_factor);
+          else
+            codestream.access_qcd().set_irrev_quant(quantization_step);
+        }
         codestream.set_planar(true);
         if (profile_string[0] != '\0')
           codestream.set_profile(profile_string);
-        codestream.set_tilepart_divisions(tileparts_at_resolutions, 
+        codestream.set_tilepart_divisions(tileparts_at_resolutions,
                                           tileparts_at_components);
-        codestream.request_tlm_marker(tlm_marker);          
+        codestream.request_tlm_marker(tlm_marker);
 
         yuv.open(input_filename);
         base = &yuv;
@@ -1029,12 +1071,19 @@ int main(int argc, char * argv[]) {
             "color transform is meaningless since .raw files are single "
             "component files");
         cod.set_reversible(reversible);
-        if (!reversible && quantization_step != -1.0f)
-          codestream.access_qcd().set_irrev_quant(quantization_step);
+        if (!reversible && (quantization_step != -1.0f || q_factor != -1)) {
+          if (quantization_step != -1.0f && q_factor != -1)
+            OJPH_WARN(0x01000099, "-qstep and -qfactor are mutually exclusive;"
+              " -qfactor takes precedence\n");
+          if (q_factor != -1)
+            codestream.access_qcd().set_irrev_quant_from_qfactor(q_factor);
+          else
+            codestream.access_qcd().set_irrev_quant(quantization_step);
+        }
         codestream.set_planar(true);
         if (profile_string[0] != '\0')
           codestream.set_profile(profile_string);
-        codestream.set_tilepart_divisions(tileparts_at_resolutions, 
+        codestream.set_tilepart_divisions(tileparts_at_resolutions,
                                           tileparts_at_components);
         codestream.request_tlm_marker(tlm_marker);
 
@@ -1069,8 +1118,15 @@ int main(int argc, char * argv[]) {
         else
           cod.set_color_transform(employ_color_transform == 1);
         cod.set_reversible(reversible);
-        if (!reversible && quantization_step != -1)
-          codestream.access_qcd().set_irrev_quant(quantization_step);
+        if (!reversible && (quantization_step != -1.0f || q_factor != -1)) {
+          if (quantization_step != -1.0f && q_factor != -1)
+            OJPH_WARN(0x01000099, "-qstep and -qfactor are mutually exclusive;"
+              " -qfactor takes precedence\n");
+          if (q_factor != -1)
+            codestream.access_qcd().set_irrev_quant_from_qfactor(q_factor);
+          else
+            codestream.access_qcd().set_irrev_quant(quantization_step);
+        }
         codestream.set_planar(false);
         if (profile_string[0] != '\0')
           codestream.set_profile(profile_string);
