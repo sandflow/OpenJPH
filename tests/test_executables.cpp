@@ -1460,6 +1460,76 @@ TEST(TestExecutables, DpxEnc1280x72016bitResolve18) {
               "dpx_1280x720_16bit.ppm", "", 3, mse, pae);
 }
 
+///////////////////////////////////////////////////////////////////////////////
+// Test ojph_compress with Qfactor using Malamute.ppm (4:4:4 with YCC).
+// We test by comparing MSE and PAE of decoded images.
+// Command-line options used to obtain this file:
+// -o qfactor_enc_malamute_q80.j2c -qfactor 80
+TEST(TestExecutables, QfactorEncMalamute80) {
+  double mse[3] = { 15.5908, 14.013, 19.1866};
+  int pae[3] = { 41, 39, 40};
+  run_ojph_compress("Malamute.ppm",
+                    "qfactor_enc_malamute_q80", "", "j2c",
+                    "-qfactor 80");
+  run_ojph_compress_expand("qfactor_enc_malamute_q80", "j2c", "ppm");
+  run_mse_pae("qfactor_enc_malamute_q80", "ppm",
+              "Malamute.ppm", "", 3, mse, pae);
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Test ojph_compress with Qfactor using Malamute.ppm (4:4:4 with YCC).
+// We test by comparing MSE and PAE of decoded images.
+// Command-line options used to obtain this file:
+// -o qfactor_enc_malamute_q50.j2c -qfactor 50
+TEST(TestExecutables, QfactorEncMalamute50) {
+  double mse[3] = { 33.5135, 31.2265, 40.7346};
+  int pae[3] = { 54, 57, 53};
+  run_ojph_compress("Malamute.ppm",
+                    "qfactor_enc_malamute_q50", "", "j2c",
+                    "-qfactor 50");
+  run_ojph_compress_expand("qfactor_enc_malamute_q50", "j2c", "ppm");
+  run_mse_pae("qfactor_enc_malamute_q50", "ppm",
+              "Malamute.ppm", "", 3, mse, pae);
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Test ojph_compress with Qfactor using foreman_420.yuv (4:2:0 with YCC).
+// We test by comparing MSE and PAE of decoded images.
+// Command-line options used to obtain this file:
+// -o qfactor_enc_foreman_q80.j2c -qfactor 80 -dims {352,288} -num_comps 3
+// -downsamp {1,1},{2,2},{2,2} -bit_depth 8,8,8 -signed false,false,false
+TEST(TestExecutables, QfactorEncForeman420Q80) {
+  double mse[3] = { 11.2384, 2.96114, 1.63108};
+  int pae[3] = { 30, 14, 22};
+  run_ojph_compress("foreman_420.yuv",
+                    "qfactor_enc_foreman_q80", "", "j2c",
+                    "-qfactor 80 -dims \"{352,288}\" -num_comps 3"
+                    " -downsamp \"{1,1}\",\"{2,2}\",\"{2,2}\""
+                    " -bit_depth 8,8,8 -signed false,false,false");
+  run_ojph_compress_expand("qfactor_enc_foreman_q80", "j2c", "yuv");
+  run_mse_pae("qfactor_enc_foreman_q80", "yuv",
+              "foreman_420.yuv", ":352x288x8x420", 3, mse, pae);
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Test ojph_compress with Qfactor using foreman_420.yuv (4:2:0 with YCC).
+// We test by comparing MSE and PAE of decoded images.
+// Command-line options used to obtain this file:
+// -o qfactor_enc_foreman_q50.j2c -qfactor 50 -dims {352,288} -num_comps 3
+// -downsamp {1,1},{2,2},{2,2} -bit_depth 8,8,8 -signed false,false,false
+TEST(TestExecutables, QfactorEncForeman420Q50) {
+  double mse[3] = { 22.9651, 4.84931, 3.09474};
+  int pae[3] = { 60, 21, 29};
+  run_ojph_compress("foreman_420.yuv",
+                    "qfactor_enc_foreman_q50", "", "j2c",
+                    "-qfactor 50 -dims \"{352,288}\" -num_comps 3"
+                    " -downsamp \"{1,1}\",\"{2,2}\",\"{2,2}\""
+                    " -bit_depth 8,8,8 -signed false,false,false");
+  run_ojph_compress_expand("qfactor_enc_foreman_q50", "j2c", "yuv");
+  run_mse_pae("qfactor_enc_foreman_q50", "yuv",
+              "foreman_420.yuv", ":352x288x8x420", 3, mse, pae);
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 //                                   main
 ////////////////////////////////////////////////////////////////////////////////
