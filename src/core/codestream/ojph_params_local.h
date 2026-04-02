@@ -741,6 +741,7 @@ namespace ojph {
         q_factor = -1;
         qf_bit_depth = 0;
         qf_comp = 0;
+        qf_chroma_format = 0;
         enabled = true;
         next = NULL;
         this->top_qcd = top_qcd;
@@ -783,9 +784,10 @@ namespace ojph {
       ui32 num_subbands;  // number of subbands
       float base_delta;   // base quantization step size -- all other
                           // step sizes are derived from it.
-      int q_factor;       // HTJ2K Q-factor (1-100), or -1 if not used
-      ui32 qf_bit_depth;  // bit depth used for Q-factor eps0 calculation
-      int qf_comp;        // component index for Q-factor (0=Y/Gray, 1=Cb, 2=Cr)
+      int q_factor;         // HTJ2K Q-factor (1-100), or -1 if not used
+      ui32 qf_bit_depth;    // bit depth used for Q-factor eps0 calculation
+      int qf_comp;          // component index for Q-factor (0=Y/Gray, 1=Cb, 2=Cr)
+      int qf_chroma_format; // chroma format for W_b selection: 0=4:4:4, 1=4:2:0, 2=4:2:2
       bool enabled;       // enabled if two, and ignored if false
       param_qcd *next;    // pointer to create chains of qcc marker segments
       param_qcd *top_qcd; // pointer to the top QCD (this is the default)

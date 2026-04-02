@@ -1281,6 +1281,18 @@ namespace ojph {
         bool employing_ycc = cod.is_employing_color_transform();
         if (employing_ycc)
         {
+          // Derive chroma format from component 1 downsampling factors.
+          // 0=4:4:4, 1=4:2:0, 2=4:2:2
+          int chroma_fmt = 0;
+          {
+            point ds = siz.get_downsampling(1);
+            if (ds.x == 2 && ds.y == 2)
+              chroma_fmt = 1; // 4:2:0
+            else if (ds.x == 2 && ds.y == 1)
+              chroma_fmt = 2; // 4:2:2
+            // else 4:4:4 (ds.x==1 && ds.y==1)
+          }
+
           for (ui32 c = 1; c <= 2; ++c)
           {
             const param_cod *cp = cod.get_coc(c);
@@ -1292,10 +1304,11 @@ namespace ojph {
               qp = add_qcc_object(c);
 
             ui32 nd = cp->get_num_decompositions();
-            qp->num_subbands  = 1 + 3 * nd;
-            qp->q_factor      = q_factor;
-            qp->qf_bit_depth  = siz.get_bit_depth(c);
-            qp->qf_comp       = (int)c;
+            qp->num_subbands      = 1 + 3 * nd;
+            qp->q_factor          = q_factor;
+            qp->qf_bit_depth      = siz.get_bit_depth(c);
+            qp->qf_comp           = (int)c;
+            qp->qf_chroma_format  = chroma_fmt;
             qp->set_irrev_quant(nd);
           }
         }
@@ -1383,9 +1396,9 @@ namespace ojph {
       if (q_factor >= 0)
       {
         // Q-factor quantization per HTJ2K white paper.
-        // Visual weighting factors (square roots) for Y, Cb, Cr components
-        // in 4:4:4 YCC ordering (index 0 = finest detail HH subband).
-        static const double W_b[3][15] = {
+        // Visual weighting factors (square roots) for Y, Cb, Cr in each
+        // chroma format (index 0 = finest detail HH subband).
+        static const double W_b_444[3][15] = {
           // Y:
           {0.0901, 0.2758, 0.2758, 0.7018, 0.8378, 0.8378,
            1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000,
@@ -1399,12 +1412,46 @@ namespace ojph {
            0.5040, 0.6464, 0.6464, 0.7220, 0.8254, 0.8254,
            0.8769, 0.9424, 0.9424}
         };
+        static const double W_b_420[3][15] = {
+          // Y (same as 4:4:4):
+          {0.0901, 0.2758, 0.2758, 0.7018, 0.8378, 0.8378,
+           1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000,
+           1.0000, 1.0000, 1.0000},
+          // Cb:
+          {0.1362, 0.2564, 0.2564, 0.3346, 0.4691, 0.4691,
+           0.5444, 0.6523, 0.6523, 0.7078, 0.7797, 0.7797,
+           1.0000, 1.0000, 1.0000},
+          // Cr:
+          {0.2598, 0.4130, 0.4130, 0.5040, 0.6464, 0.6464,
+           0.7220, 0.8254, 0.8254, 0.8769, 0.9424, 0.9424,
+           1.0000, 1.0000, 1.0000}
+        };
+        static const double W_b_422[3][15] = {
+          // Y (same as 4:4:4):
+          {0.0901, 0.2758, 0.2758, 0.7018, 0.8378, 0.8378,
+           1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000,
+           1.0000, 1.0000, 1.0000},
+          // Cb:
+          {0.0863, 0.0863, 0.2564, 0.2564, 0.2564, 0.4691,
+           0.4691, 0.4691, 0.6523, 0.6523, 0.6523, 0.7797,
+           0.7797, 0.7797, 1.0000},
+          // Cr:
+          {0.1835, 0.1835, 0.4130, 0.4130, 0.4130, 0.6464,
+           0.6464, 0.6464, 0.8254, 0.8254, 0.8254, 0.9424,
+           0.9424, 0.9424, 1.0000}
+        };
         // Squared Euclidean norm of multi-component synthesis operator
         // (sqrt of contribution of Y/Cb/Cr to RGB reconstruction).
         static const double G_c_sqrt[3] = {1.7321, 1.8051, 1.5734};
 
         int c = (qf_comp >= 0 && qf_comp <= 2) ? qf_comp : 0;
-        const double *w_b_tab = W_b[c];
+        const double (*W_b_tab)[15];
+        switch (qf_chroma_format) {
+          case 1:  W_b_tab = W_b_420; break;
+          case 2:  W_b_tab = W_b_422; break;
+          default: W_b_tab = W_b_444; break;
+        }
+        const double *w_b_tab = W_b_tab[c];
         double G_c = G_c_sqrt[c];
 
         // Map q-factor to M_Q (distortion scaling)
