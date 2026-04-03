@@ -1176,22 +1176,24 @@ namespace ojph {
       ui32 num_comps = siz.get_num_components();
       trim_non_existing_components(num_comps);
 
-      // check that no QCC has been defined for the first three components,
-      // if Q Factor is used
+      // if q factor is used, the first three components are assumed to be
+      // Y, Cb and Cr, or RGB with a color transform
       if (q_factor >= 0)
       {
         if (num_comps < 3)
           OJPH_ERROR(0x00050140, "Q factor cannot be used when the number of "
             "components is less than 3");
+        if (cod.access_atk() != NULL)
+          OJPH_ERROR(0x00050143, "Q factor cannot be used when ATK is used");
+        if (cod.is_dfs_defined())
+          OJPH_ERROR(0x00050144, "Q factor cannot be used when DFS is used");
+
+        // check that no QCC has been defined for the first three components
         for (ui32 c = 0; c < 3; ++c)
         {
           if (get_qcc(c) != this)
             OJPH_ERROR(0x00050141, "QCC cannot be defined for component %d "
               "when Q factor is used", c);
-
-          /* TODO: make sure the components are 4:4:4, 4:2:2 or 4:2:0 */
-
-          /* TODO: make sure that there is no DFS or ATK*/
         }
 
         point ds = siz.get_downsampling(0);
