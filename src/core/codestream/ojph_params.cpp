@@ -1147,7 +1147,46 @@ namespace ojph {
       ui32 num_comps = siz.get_num_components();
       trim_non_existing_components(num_comps);
 
-      // first check that all the component captured by QCD have the same
+      // check that no QCC has been defined for the first three components,
+      // if Q Factor is used
+      if (q_factor >= 0)
+      {
+        if (num_comps < 3)
+          OJPH_ERROR(0x00050140, "Q factor cannot be used when the number of "
+            "components is less than 3");
+        for (ui32 c = 0; c < 3; ++c)
+        {
+          if (get_qcc(c) != this)
+            OJPH_ERROR(0x00050141, "QCC cannot be defined for component %d "
+              "when Q factor is used", c);
+
+          /* TODO: make sure the components are 4:4:4, 4:2:2 or 4:2:0 */
+
+          /* TODO: make sure that there is no DFS or ATK*/
+        }
+
+        point ds = siz.get_downsampling(0);
+        point ds1 = siz.get_downsampling(1);
+        point ds2 = siz.get_downsampling(2);
+        if (ds.x == 1 && ds.y == 1 && ds1.x == 1 && ds1.y == 1 && ds2.x == 1 && ds2.y == 1)
+        {
+          this->qf_chroma_format = 1; // 4:4:4
+        }
+        else if (ds.x == 1 && ds.y == 1 && ds1.x == 2 && ds1.y == 1 && ds2.x == 2 && ds2.y == 1)
+        {
+          this->qf_chroma_format = 2; // 4:2:2
+        }
+        else if (ds.x == 1 && ds.y == 1 && ds1.x == 2 && ds1.y == 2 && ds2.x == 2 && ds2.y == 2)
+        {
+          this->qf_chroma_format = 3; // 4:2:0
+        }
+        else
+          OJPH_ERROR(0x00050142, "When Q factor is used, the first three components "
+            "must have the same downsampling factors of either (1,1), (2,1) or (2,2)");
+
+      }
+
+      // check that all the component captured by QCD have the same
       // bit_depth and signedness
       bool all_same = true;
       bool other_comps_exist = false;
@@ -1203,11 +1242,9 @@ namespace ojph {
             qcd_component < 3 ? employing_color_transform : false);
         else if (qcd_wavelet_kern == param_cod::DWT_IRV97)
         {
-          this->qf_bit_depth = qcd_bit_depth;
-          this->qf_comp = 0;
-          if (q_factor < 0 && this->base_delta == -1.0f)
+          if (this->base_delta == -1.0f)
             this->base_delta = 1.0f / (float)(1 << qcd_bit_depth);
-          set_irrev_quant(qcd_num_decompositions);
+          set_irrev_quant(siz, qcd_component, qcd_num_decompositions);
         }
         else
           assert(0);
@@ -1233,6 +1270,10 @@ namespace ojph {
 
           ui32 num_decompositions = cp->get_num_decompositions();
           qp->num_subbands = 1 + 3 * num_decompositions;
+          if (qp->q_factor >= 0) {
+            qp->q_factor = q_factor;
+            qp->qf_chroma_format  = qf_chroma_format;
+          }
           ui32 bit_depth = siz.get_bit_depth(c);
           if (cp->get_wavelet_kern() == param_cod::DWT_REV53)
             qp->set_rev_quant(num_decompositions, bit_depth,
@@ -1241,7 +1282,7 @@ namespace ojph {
           {
             if (qp->base_delta == -1.0f)
               qp->base_delta = 1.0f / (float)(1 << bit_depth);
-            qp->set_irrev_quant(num_decompositions);
+            set_irrev_quant(siz, c, qcd_num_decompositions);
           }
           else
             assert(0);
@@ -1266,53 +1307,13 @@ namespace ojph {
           {
             if (qp->base_delta == -1.0f)
               qp->base_delta = 1.0f / (float)(1 << bit_depth);
-            qp->set_irrev_quant(num_decompositions);
+            qp->set_irrev_quant(siz, c, num_decompositions);
           }
           else
             assert(0);
         }
       }
 
-      // When Q-factor is set for a 3-component image, create per-component
-      // QCC markers for Cb (comp 1) and Cr (comp 2) with their respective
-      // visual weighting factors, matching OpenHTJ2K behaviour.
-      if (q_factor >= 0 && num_comps >= 3)
-      {
-        bool employing_ycc = cod.is_employing_color_transform();
-        if (employing_ycc)
-        {
-          // Derive chroma format from component 1 downsampling factors.
-          // 0=4:4:4, 1=4:2:0, 2=4:2:2
-          int chroma_fmt = 0;
-          {
-            point ds = siz.get_downsampling(1);
-            if (ds.x == 2 && ds.y == 2)
-              chroma_fmt = 1; // 4:2:0
-            else if (ds.x == 2 && ds.y == 1)
-              chroma_fmt = 2; // 4:2:2
-            // else 4:4:4 (ds.x==1 && ds.y==1)
-          }
-
-          for (ui32 c = 1; c <= 2; ++c)
-          {
-            const param_cod *cp = cod.get_coc(c);
-            if (cp->get_wavelet_kern() != param_cod::DWT_IRV97)
-              continue;
-
-            param_qcd *qp = get_qcc(c);
-            if (qp == this)                // no QCC yet -- create one
-              qp = add_qcc_object(c);
-
-            ui32 nd = cp->get_num_decompositions();
-            qp->num_subbands      = 1 + 3 * nd;
-            qp->q_factor          = q_factor;
-            qp->qf_bit_depth      = siz.get_bit_depth(c);
-            qp->qf_comp           = (int)c;
-            qp->qf_chroma_format  = chroma_fmt;
-            qp->set_irrev_quant(nd);
-          }
-        }
-      }
     }
 
     //////////////////////////////////////////////////////////////////////////
@@ -1386,8 +1387,9 @@ namespace ojph {
       return (ui16)((e << 11) | m);
     }
 
+
     //////////////////////////////////////////////////////////////////////////
-    void param_qcd::set_irrev_quant(ui32 num_decomps)
+    void param_qcd::set_irrev_quant(const param_siz& siz, ui32 comp_idx, ui32 num_decomps)
     {
       int guard_bits = 1;
       Sqcd = (ui8)((guard_bits<<5)|0x2);//one guard bit, scalar quantization
@@ -1444,10 +1446,10 @@ namespace ojph {
         // (sqrt of contribution of Y/Cb/Cr to RGB reconstruction).
         static const double G_c_sqrt[3] = {1.7321, 1.8051, 1.5734};
 
-        int c = (qf_comp >= 0 && qf_comp <= 2) ? qf_comp : 0;
+        int c = comp_idx;
         const double (*W_b_tab)[15];
         switch (qf_chroma_format) {
-          case 1:  W_b_tab = W_b_420; break;
+          case 3:  W_b_tab = W_b_420; break;
           case 2:  W_b_tab = W_b_422; break;
           default: W_b_tab = W_b_444; break;
         }
@@ -1476,8 +1478,7 @@ namespace ojph {
         }
 
         // eps0: white-noise floor scaled by bit depth
-        ui32 bd = (qf_bit_depth > 0) ? qf_bit_depth : 8u;
-        double eps0 = sqrt(0.5) / (double)(1u << bd);
+        double eps0 = sqrt(0.5) / (double)(1u << siz.get_bit_depth(comp_idx));
         double delta_Q = alpha_Q * M_Q;
         // delta_ref always uses G_c_sqrt[0] (Y/luma reference)
         double delta_ref = delta_Q * G_c_sqrt[0] + eps0;
@@ -1516,42 +1517,43 @@ namespace ojph {
           SPqcd.u16[s++] = qf_encode_step(
             delta_ref / (sqrt_wmse_hh  * w_hh * G_c)); // HH
         }
-        return;
-      }
 
-      float gain_l = sqrt_energy_gains::get_gain_l(num_decomps, false);
-      float delta_b = base_delta / (gain_l * gain_l);
-      int exp = 0, mantissa;
-      while (delta_b < 1.0f)
-      { exp++; delta_b *= 2.0f; }
-      //with rounding, there is a risk of becoming equal to 1<<12
-      // but that should not happen in reality
-      mantissa = (int)round(delta_b * (float)(1<<11)) - (1<<11);
-      mantissa = mantissa < (1<<11) ? mantissa : 0x7FF;
-      SPqcd.u16[s++] = (ui16)((exp << 11) | mantissa);
-      for (ui32 d = num_decomps; d > 0; --d)
-      {
-        float gain_l = sqrt_energy_gains::get_gain_l(d, false);
-        float gain_h = sqrt_energy_gains::get_gain_h(d - 1, false);
-
-        delta_b = base_delta / (gain_l * gain_h);
-
+      } else {
+        /* q-factor is not defined */
+        float gain_l = sqrt_energy_gains::get_gain_l(num_decomps, false);
+        float delta_b = base_delta / (gain_l * gain_l);
         int exp = 0, mantissa;
         while (delta_b < 1.0f)
         { exp++; delta_b *= 2.0f; }
+        //with rounding, there is a risk of becoming equal to 1<<12
+        // but that should not happen in reality
         mantissa = (int)round(delta_b * (float)(1<<11)) - (1<<11);
         mantissa = mantissa < (1<<11) ? mantissa : 0x7FF;
         SPqcd.u16[s++] = (ui16)((exp << 11) | mantissa);
-        SPqcd.u16[s++] = (ui16)((exp << 11) | mantissa);
+        for (ui32 d = num_decomps; d > 0; --d)
+        {
+          float gain_l = sqrt_energy_gains::get_gain_l(d, false);
+          float gain_h = sqrt_energy_gains::get_gain_h(d - 1, false);
 
-        delta_b = base_delta / (gain_h * gain_h);
+          delta_b = base_delta / (gain_l * gain_h);
 
-        exp = 0;
-        while (delta_b < 1)
-        { exp++; delta_b *= 2.0f; }
-        mantissa = (int)round(delta_b * (float)(1<<11)) - (1<<11);
-        mantissa = mantissa < (1<<11) ? mantissa : 0x7FF;
-        SPqcd.u16[s++] = (ui16)((exp << 11) | mantissa);
+          int exp = 0, mantissa;
+          while (delta_b < 1.0f)
+          { exp++; delta_b *= 2.0f; }
+          mantissa = (int)round(delta_b * (float)(1<<11)) - (1<<11);
+          mantissa = mantissa < (1<<11) ? mantissa : 0x7FF;
+          SPqcd.u16[s++] = (ui16)((exp << 11) | mantissa);
+          SPqcd.u16[s++] = (ui16)((exp << 11) | mantissa);
+
+          delta_b = base_delta / (gain_h * gain_h);
+
+          exp = 0;
+          while (delta_b < 1)
+          { exp++; delta_b *= 2.0f; }
+          mantissa = (int)round(delta_b * (float)(1<<11)) - (1<<11);
+          mantissa = mantissa < (1<<11) ? mantissa : 0x7FF;
+          SPqcd.u16[s++] = (ui16)((exp << 11) | mantissa);
+        }
       }
     }
 

@@ -739,8 +739,6 @@ namespace ojph {
         num_subbands = 0;
         base_delta = -1.0f;
         q_factor = -1;
-        qf_bit_depth = 0;
-        qf_comp = 0;
         qf_chroma_format = 0;
         enabled = true;
         next = NULL;
@@ -762,7 +760,7 @@ namespace ojph {
     private:
       void set_rev_quant(ui32 num_decomps, ui32 bit_depth,
                          bool is_employing_color_transform);
-      void set_irrev_quant(ui32 num_decomps);
+      void set_irrev_quant(const param_siz& siz, ui32 comp_idx, ui32 num_decomps);
       ui32 get_largest_Kmax() const;
       bool internal_write_qcc(outfile_base *file, ui32 num_comps);
       void trim_non_existing_components(ui32 num_comps);
@@ -785,8 +783,6 @@ namespace ojph {
       float base_delta;   // base quantization step size -- all other
                           // step sizes are derived from it.
       int q_factor;         // HTJ2K Q-factor (1-100), or -1 if not used
-      ui32 qf_bit_depth;    // bit depth used for Q-factor eps0 calculation
-      int qf_comp;          // component index for Q-factor (0=Y/Gray, 1=Cb, 2=Cr)
       int qf_chroma_format; // chroma format for W_b selection: 0=4:4:4, 1=4:2:0, 2=4:2:2
       bool enabled;       // enabled if two, and ignored if false
       param_qcd *next;    // pointer to create chains of qcc marker segments
