@@ -1194,6 +1194,9 @@ namespace ojph {
           if (get_qcc(c) != this)
             OJPH_ERROR(0x00050141, "QCC cannot be defined for component %d "
               "when Q factor is used", c);
+          if (cod.get_coc(c) != &cod)
+            OJPH_ERROR(0x00050145, "COC cannot be defined for component %d "
+              "when Q factor is used", c);
         }
 
         point ds = siz.get_downsampling(0);
@@ -1301,7 +1304,7 @@ namespace ojph {
 
           ui32 num_decompositions = cp->get_num_decompositions();
           qp->num_subbands = 1 + 3 * num_decompositions;
-          if (qp->q_factor >= 0) {
+          if (c < 3 && qp->q_factor >= 0) {
             qp->q_factor = q_factor;
             qp->qf_chroma_format  = qf_chroma_format;
           }
@@ -1330,6 +1333,10 @@ namespace ojph {
           const param_cod *cp = cod.get_coc(c);
           ui32 num_decompositions = cp->get_num_decompositions();
           qp->num_subbands = 1 + 3 * num_decompositions;
+          if (c < 3 && qp->q_factor >= 0) {
+            qp->q_factor = q_factor;
+            qp->qf_chroma_format  = qf_chroma_format;
+          }
           ui32 bit_depth = siz.get_bit_depth(c);
           if (cp->get_wavelet_kern() == param_cod::DWT_REV53)
             qp->set_rev_quant(num_decompositions, bit_depth,
