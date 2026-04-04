@@ -1183,8 +1183,8 @@ namespace ojph {
         if (num_comps < 3)
           OJPH_ERROR(0x00050140, "Q factor cannot be used when the number of "
             "components is less than 3");
-        if (cod.access_atk() != NULL)
-          OJPH_ERROR(0x00050143, "Q factor cannot be used when ATK is used");
+        // if (cod.access_atk() != NULL)
+        //   OJPH_ERROR(0x00050143, "Q factor cannot be used when ATK is used");
         if (cod.is_dfs_defined())
           OJPH_ERROR(0x00050144, "Q factor cannot be used when DFS is used");
 
