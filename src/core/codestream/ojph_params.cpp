@@ -1176,7 +1176,45 @@ namespace ojph {
       ui32 num_comps = siz.get_num_components();
       trim_non_existing_components(num_comps);
 
-      // if q factor is used, the first three components are assumed to be
+      // check that all the component captured by QCD have the same
+      // bit_depth and signedness
+      bool all_same = true;
+      bool other_comps_exist = false;
+      ui32 first_comp = 0xFFFF; // an impossible component
+      {
+        ui32 num_decompositions = 0;
+        ui32 bit_depth = 0;
+        bool is_signed = false;
+        ui32 wavelet_kern = param_cod::DWT_IRV97;
+
+        for (ui32 c = 0; c < num_comps; ++c)
+        {
+          if (get_qcc(c) == this) // no qcc defined for component c
+          {
+            const param_cod *p = cod.get_coc(c);
+            if (bit_depth == 0) // first component captured by QCD
+            {
+              num_decompositions = p->get_num_decompositions();
+              bit_depth = siz.get_bit_depth(c);
+              is_signed = siz.is_signed(c);
+              wavelet_kern = p->get_wavelet_kern();
+              first_comp = c;
+            }
+            else
+            {
+              all_same = all_same
+                && (num_decompositions == p->get_num_decompositions())
+                && (bit_depth == siz.get_bit_depth(c))
+                && (is_signed == siz.is_signed(c))
+                && (wavelet_kern == p->get_wavelet_kern());
+            }
+          }
+          else
+            other_comps_exist = true;
+        }
+      }
+
+            // if q factor is used, the first three components are assumed to be
       // Y, Cb and Cr, or RGB with a color transform
       if (q_factor >= 0)
       {
@@ -1218,44 +1256,8 @@ namespace ojph {
           OJPH_ERROR(0x00050142, "When Q factor is used, the first three components "
             "must have the same downsampling factors of either (1,1), (2,1) or (2,2)");
 
-      }
+        all_same = false;
 
-      // check that all the component captured by QCD have the same
-      // bit_depth and signedness
-      bool all_same = true;
-      bool other_comps_exist = false;
-      ui32 first_comp = 0xFFFF; // an impossible component
-      {
-        ui32 num_decompositions = 0;
-        ui32 bit_depth = 0;
-        bool is_signed = false;
-        ui32 wavelet_kern = param_cod::DWT_IRV97;
-
-        for (ui32 c = 0; c < num_comps; ++c)
-        {
-          if (get_qcc(c) == this) // no qcc defined for component c
-          {
-            const param_cod *p = cod.get_coc(c);
-            if (bit_depth == 0) // first component captured by QCD
-            {
-              num_decompositions = p->get_num_decompositions();
-              bit_depth = siz.get_bit_depth(c);
-              is_signed = siz.is_signed(c);
-              wavelet_kern = p->get_wavelet_kern();
-              first_comp = c;
-            }
-            else
-            {
-              all_same = all_same
-                && (num_decompositions == p->get_num_decompositions())
-                && (bit_depth == siz.get_bit_depth(c))
-                && (is_signed == siz.is_signed(c))
-                && (wavelet_kern == p->get_wavelet_kern());
-            }
-          }
-          else
-            other_comps_exist = true;
-        }
       }
 
       // configure QCD according COD
@@ -1290,8 +1292,10 @@ namespace ojph {
         bool employing_color_transform = cod.is_employing_color_transform();
         for (ui32 c = 0; c < num_comps; ++c)
         {
+          if (c == first_comp)
+            continue; // already captured by QCD
           const param_cod *cp = cod.get_coc(c);
-          if (qcd_num_decompositions == cp->get_num_decompositions()
+          if ((c >= 3 || q_factor < 0) && qcd_num_decompositions == cp->get_num_decompositions()
               && qcd_bit_depth == siz.get_bit_depth(c)
               && qcd_is_signed == siz.is_signed(c)
               && qcd_wavelet_kern == cp->get_wavelet_kern())
@@ -1304,7 +1308,7 @@ namespace ojph {
 
           ui32 num_decompositions = cp->get_num_decompositions();
           qp->num_subbands = 1 + 3 * num_decompositions;
-          if (c < 3 && qp->q_factor >= 0) {
+          if (c < 3 && q_factor >= 0) {
             qp->q_factor = q_factor;
             qp->qf_chroma_format  = qf_chroma_format;
           }
@@ -1316,7 +1320,7 @@ namespace ojph {
           {
             if (qp->base_delta == -1.0f)
               qp->base_delta = 1.0f / (float)(1 << bit_depth);
-            set_irrev_quant(siz, c, qcd_num_decompositions);
+            qp->set_irrev_quant(siz, c, qcd_num_decompositions);
           }
           else
             assert(0);
