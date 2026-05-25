@@ -789,10 +789,10 @@ namespace ojph {
 
         // we keeps e_k, e_1, and rho in w2
         __m256i flags = _mm256_and_si256(inf_u_q, _mm256_set_epi32(0x8880, 0x4440, 0x2220, 0x1110, 0x8880, 0x4440, 0x2220, 0x1110));
-        __m256i insig = _mm256_cmpeq_epi32(flags, _mm256_setzero_si256());
 
-        if ((uint32_t)_mm256_movemask_epi8(insig) != (uint32_t)0xFFFFFFFF) //are all insignificant?
+        if (!_mm256_testz_si256(flags, flags)) //are all insignificant?
         {
+            __m256i insig = _mm256_cmpeq_epi32(flags, _mm256_setzero_si256());
             flags = _mm256_mullo_epi16(flags, _mm256_set_epi16(1, 1, 2, 2, 4, 4, 8, 8, 1, 1, 2, 2, 4, 4, 8, 8));
 
             // U_q holds U_q for this quad
@@ -856,11 +856,11 @@ namespace ojph {
             __m256i shift;
             __m256i ones = _mm256_set1_epi32(1);
             __m256i twos = _mm256_set1_epi32(2);
+            // U_q is broadcast to all 4 lanes per 128-bit half by the caller,
+            // and is <= 30, so U_q-1 is a valid sllv shift count without masking.
             __m256i U_q_m1 = _mm256_sub_epi32(U_q, ones);
-            U_q_m1 = _mm256_and_si256(U_q_m1, _mm256_set_epi32(0, 0, 0, 0x1F, 0, 0, 0, 0x1F));
-            U_q_m1 = _mm256_shuffle_epi32(U_q_m1, 0);
             w0 = _mm256_sub_epi32(twos, w0);
-            shift = _mm256_sllv_epi32(w0, U_q_m1); // U_q_m1 must be no more than 31
+            shift = _mm256_sllv_epi32(w0, U_q_m1);
             ms_vec = _mm256_and_si256(d0, _mm256_sub_epi32(shift, ones));
 
             // next e_1
@@ -880,8 +880,9 @@ namespace ojph {
 
             tvn = _mm256_shuffle_epi8(ms_vec, _mm256_set_epi32(-1, 0x0F0E0D0C, 0x07060504, -1, -1, -1, 0x0F0E0D0C, 0x07060504));
 
-            vn = _mm_or_si128(vn, _mm256_castsi256_si128(tvn));
-            vn = _mm_or_si128(vn, _mm256_extracti128_si256(tvn, 0x1));
+            __m128i tvn_lo = _mm256_castsi256_si128(tvn);
+            __m128i tvn_hi = _mm256_extracti128_si256(tvn, 0x1);
+            vn = _mm_or_si128(vn, _mm_or_si128(tvn_lo, tvn_hi));
         }
         return row;
     }
