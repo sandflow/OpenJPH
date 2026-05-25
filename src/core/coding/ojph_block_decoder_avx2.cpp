@@ -589,12 +589,15 @@ namespace ojph {
     /** @brief State structure for reading and unstuffing of forward-growing
      *         bitstreams; these are: MagSgn and SPP bitstreams
      */
-    struct frwd_struct_avx2 {
-      const ui8* data;  //!<pointer to bitstream
+    // Hot fields (tmp, bits, unstuff, size) are kept on cache line 0;
+    // the cold pointer (data) is pushed to cache line 1.
+    struct alignas(64) frwd_struct_avx2 {
       ui8 tmp[48];      //!<temporary buffer of read data + 16 extra
       ui32 bits;        //!<number of bits stored in tmp
       ui32 unstuff;     //!<1 if a bit needs to be unstuffed from next byte
       int size;         //!<size of data
+      ui32 pad_;        //!<padding to push data to cache line 1
+      const ui8* data;  //!<pointer to bitstream
     };
 
     //************************************************************************/
@@ -625,6 +628,7 @@ namespace ojph {
       val = _mm_loadu_si128((__m128i*)msp->data);
       int bytes = msp->size >= 16 ? 16 : msp->size;
       validity = _mm_set1_epi8((char)bytes);
+      _mm_prefetch((const char*)msp->data + 32, _MM_HINT_T0);
       msp->data += bytes;
       msp->size -= bytes;
       int bits = 128;
@@ -1443,6 +1447,7 @@ namespace ojph {
 
           for (ui32 x = 0; x < width; x += 4, sp += 4, vp += 2, dp += 4)
           {
+            _mm_prefetch((const char*)(dp + stride * 2), _MM_HINT_T0);
             __m128i vn = _mm_set1_epi32(2);
 
             __m256i inf_u_q = _mm256_castsi128_si256(_mm_loadl_epi64((__m128i*)sp));
@@ -1512,6 +1517,7 @@ namespace ojph {
 
           for (ui32 x = 0; x < width; x += 4, sp += 4, vp += 2, dp += 4) {
             //process two quads
+            _mm_prefetch((const char*)(dp + stride * 2), _MM_HINT_T0);
             __m128i vn = _mm_set1_epi32(2);
 
             __m256i inf_u_q = _mm256_castsi128_si256(_mm_loadl_epi64((__m128i*)sp));
@@ -1557,6 +1563,7 @@ namespace ojph {
 
           for (ui32 x = 0; x < width; x += 8, sp += 8, vp += 4, dp += 8) {
               ////process four quads
+              _mm_prefetch((const char*)(dp + stride * 2), _MM_HINT_T0);
               __m128i inf_u_q = _mm_loadu_si128((__m128i*)sp);
               __m128i U_q = _mm_srli_epi32(inf_u_q, 16);
               __m128i w = _mm_cmpgt_epi32(U_q, _mm_set1_epi32((int)mmsbp2));
@@ -1629,6 +1636,7 @@ namespace ojph {
 
           for (ui32 x = 0; x < width; x += 8, sp += 8, vp += 4, dp += 8, vp_32 += 4) {
             ////process four quads
+              _mm_prefetch((const char*)(dp + stride * 2), _MM_HINT_T0);
               __m128i inf_u_q = _mm_loadu_si128((__m128i*)sp);
               __m128i U_q = _mm_loadu_si128((__m128i*)vp_32);
 
