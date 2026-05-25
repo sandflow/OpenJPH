@@ -858,14 +858,14 @@ namespace ojph {
             d0 = _mm256_or_si256(d0, d1);
 
             // find location of e_k and mask
+            // U_q is broadcast to all 4 lanes per 128-bit half by the caller and
+            // is <= 30, so U_q-1 is a valid sllv shift count without masking.
             __m256i shift;
             __m256i ones = _mm256_set1_epi32(1);
             __m256i twos = _mm256_set1_epi32(2);
             __m256i U_q_m1 = _mm256_sub_epi32(U_q, ones);
-            U_q_m1 = _mm256_and_si256(U_q_m1, _mm256_set_epi32(0, 0, 0, 0x1F, 0, 0, 0, 0x1F));
-            U_q_m1 = _mm256_shuffle_epi32(U_q_m1, 0);
             w0 = _mm256_sub_epi32(twos, w0);
-            shift = _mm256_sllv_epi32(w0, U_q_m1); // U_q_m1 must be no more than 31
+            shift = _mm256_sllv_epi32(w0, U_q_m1);
             ms_vec = _mm256_and_si256(d0, _mm256_sub_epi32(shift, ones));
 
             // next e_1
