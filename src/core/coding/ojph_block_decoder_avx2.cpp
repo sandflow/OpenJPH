@@ -675,15 +675,34 @@ namespace ojph {
       b2 = _mm_slli_si128(val, 8);  // 8 bytes right
       b2 = _mm_srl_epi64(b2, _mm_set1_epi64x(64-cur_bits));
       b1 = _mm_or_si128(b1, b2);
-      b2 = _mm_loadu_si128((__m128i*)(msp->tmp + cur_bytes));
-      b2 = _mm_or_si128(b1, b2);
-      _mm_storeu_si128((__m128i*)(msp->tmp + cur_bytes), b2);
 
-      int consumed_bits = bits < 128 - cur_bits ? bits : 128 - cur_bits;
-      cur_bytes = (msp->bits + (ui32)consumed_bits + 7) >> 3; // round up
-      int upper = _mm_extract_epi16(val, 7);
-      upper >>= consumed_bits - 128 + 16;
-      msp->tmp[cur_bytes] = (ui8)upper; // copy byte
+      if (__builtin_expect(bits >= 128 - cur_bits, 1))
+      {
+        // Common path: upper byte lands exactly at cur_bytes + 16.
+        // Merge b1 (16 bytes) and the overflow byte into one 32-byte AVX2
+        // OR-store, replacing a 16-byte store + 1-byte store pair.
+        // The 1-byte store followed by frwd_advance's 16-byte load from
+        // tmp[cur_bytes+16] is a narrow-store/wide-load forwarding stall;
+        // a single 32-byte store forwards cleanly to both 16-byte loads.
+        int upper = _mm_extract_epi16(val, 7) >> (16 - cur_bits);
+        __m256i update = _mm256_set_m128i(_mm_cvtsi32_si128(upper), b1);
+        __m256i existing = _mm256_loadu_si256((__m256i*)(msp->tmp + cur_bytes));
+        _mm256_storeu_si256((__m256i*)(msp->tmp + cur_bytes),
+                            _mm256_or_si256(update, existing));
+      }
+      else
+      {
+        // Rare path: fewer bits than the window; upper byte is within the
+        // first 16 bytes, so fall back to the original logic.
+        b2 = _mm_loadu_si128((__m128i*)(msp->tmp + cur_bytes));
+        _mm_storeu_si128((__m128i*)(msp->tmp + cur_bytes),
+                         _mm_or_si128(b1, b2));
+        int consumed_bits = bits;
+        cur_bytes = (msp->bits + (ui32)consumed_bits + 7) >> 3; // round up
+        int upper = _mm_extract_epi16(val, 7);
+        upper >>= consumed_bits - 128 + 16;
+        msp->tmp[cur_bytes] = (ui8)upper; // copy byte
+      }
 
       msp->bits += (ui32)bits;
       msp->unstuff = next_unstuff;   // next unstuff
