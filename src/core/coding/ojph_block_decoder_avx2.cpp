@@ -727,29 +727,37 @@ namespace ojph {
       assert(num_bits > 0 && num_bits <= msp->bits && num_bits < 128);
       msp->bits -= num_bits;
 
-      __m128i *p = (__m128i*)(msp->tmp + ((num_bits >> 3) & 0x18));
-      num_bits &= 63;
+      // Always load from tmp[0] and tmp[16] — the same addresses the
+      // previous frwd_advance stored to — avoiding partial-overlap
+      // store-to-load forwarding stalls that occur when num_bits >= 64
+      // causes a variable pointer offset into tmp.
+      __m128i v0 = _mm_loadu_si128((__m128i*)msp->tmp);
+      __m128i v1 = _mm_loadu_si128((__m128i*)msp->tmp + 1);
 
-      __m128i v0, v1, c0, c1, t;
-      v0 = _mm_loadu_si128(p);
-      v1 = _mm_loadu_si128(p + 1);
+      if (num_bits >= 64) {
+        __m128i v2 = _mm_loadu_si128((__m128i*)msp->tmp + 2);
+        v0 = _mm_alignr_epi8(v1, v0, 8);
+        v1 = _mm_alignr_epi8(v2, v1, 8);
+        num_bits -= 64;
+      }
 
-      // shift right by num_bits
-      c0 = _mm_srl_epi64(v0, _mm_set1_epi64x(num_bits));
-      t = _mm_srli_si128(v0, 8);
-      t = _mm_sll_epi64(t, _mm_set1_epi64x(64 - num_bits));
+      __m128i shift   = _mm_set1_epi64x(num_bits);
+      __m128i shift_c = _mm_set1_epi64x(64 - num_bits);
+
+      __m128i c0, c1, t;
+      c0 = _mm_srl_epi64(v0, shift);
+      t  = _mm_srli_si128(v0, 8);
+      t  = _mm_sll_epi64(t, shift_c);
       c0 = _mm_or_si128(c0, t);
-      t = _mm_slli_si128(v1, 8);
-      t = _mm_sll_epi64(t, _mm_set1_epi64x(64 - num_bits));
+      t  = _mm_slli_si128(v1, 8);
+      t  = _mm_sll_epi64(t, shift_c);
       c0 = _mm_or_si128(c0, t);
-
       _mm_storeu_si128((__m128i*)msp->tmp, c0);
 
-      c1 = _mm_srl_epi64(v1, _mm_set1_epi64x(num_bits));
-      t = _mm_srli_si128(v1, 8);
-      t = _mm_sll_epi64(t, _mm_set1_epi64x(64 - num_bits));
+      c1 = _mm_srl_epi64(v1, shift);
+      t  = _mm_srli_si128(v1, 8);
+      t  = _mm_sll_epi64(t, shift_c);
       c1 = _mm_or_si128(c1, t);
-
       _mm_storeu_si128((__m128i*)msp->tmp + 1, c1);
     }
 
