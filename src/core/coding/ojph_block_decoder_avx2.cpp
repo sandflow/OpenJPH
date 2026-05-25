@@ -480,29 +480,34 @@ namespace ojph {
         }
       }
 
-      //accumulate in tmp, and keep count in bits
-      ui32 bits, tmp = val >> 24;
+      __m128i tmp_vec = _mm_set1_epi32((int32_t)val);
+      tmp_vec = _mm_srlv_epi32(tmp_vec, _mm_setr_epi32(24, 16, 8, 0));
+      tmp_vec = _mm_and_si128(tmp_vec, _mm_set1_epi32(0xFF));
 
-      //test if the last byte > 0x8F (unstuff must be true) and this is 0x7F
-      bits = 8 - ((mrp->unstuff && (((val >> 24) & 0x7F) == 0x7F)) ? 1 : 0);
-      bool unstuff = (val >> 24) > 0x8F;
+      __m128i unstuff_vec = _mm_cmpgt_epi32(tmp_vec, _mm_set1_epi32(0x8F));
+      bool unstuff_next = (bool)_mm_extract_epi32(unstuff_vec, 3);
+      unstuff_vec = _mm_slli_si128(unstuff_vec, 4);
+      unstuff_vec = _mm_insert_epi32(unstuff_vec, mrp->unstuff * 0xFFFFFFFF, 0);
 
-      //process the next byte
-      tmp |= ((val >> 16) & 0xFF) << bits;
-      bits += 8 - ((unstuff && (((val >> 16) & 0x7F) == 0x7F)) ? 1 : 0);
-      unstuff = ((val >> 16) & 0xFF) > 0x8F;
+      __m128i val_7f = _mm_set1_epi32(0x7F);
+      __m128i this_byte_7f = _mm_cmpeq_epi32(_mm_and_si128(tmp_vec, val_7f), val_7f);
+      unstuff_vec = _mm_and_si128(unstuff_vec, this_byte_7f);
+      unstuff_vec = _mm_srli_epi32(unstuff_vec, 31);
 
-      tmp |= ((val >> 8) & 0xFF) << bits;
-      bits += 8 - ((unstuff && (((val >> 8) & 0x7F) == 0x7F)) ? 1 : 0);
-      unstuff = ((val >> 8) & 0xFF) > 0x8F;
+      __m128i inc_sum = _mm_sub_epi32(_mm_set1_epi32(8), unstuff_vec);
+      inc_sum = _mm_add_epi32(inc_sum, _mm_bslli_si128(inc_sum, 4));
+      inc_sum = _mm_add_epi32(inc_sum, _mm_bslli_si128(inc_sum, 8));
+      ui32 total_bits = (ui32)_mm_extract_epi32(inc_sum, 3);
 
-      tmp |= (val & 0xFF) << bits;
-      bits += 8 - ((unstuff && ((val & 0x7F) == 0x7F)) ? 1 : 0);
-      unstuff = (val & 0xFF) > 0x8F;
+      __m128i final_shift = _mm_slli_si128(inc_sum, 4);
+      tmp_vec = _mm_sllv_epi32(tmp_vec, final_shift);
+      tmp_vec = _mm_or_si128(tmp_vec, _mm_bsrli_si128(tmp_vec, 8));
 
-      mrp->tmp |= (ui64)tmp << mrp->bits; // move data to mrp pointer
-      mrp->bits += bits;
-      mrp->unstuff = unstuff;             // next byte
+      ui64 tmp = (ui32)_mm_cvtsi128_si32(tmp_vec) | (ui32)_mm_extract_epi32(tmp_vec, 1);
+
+      mrp->unstuff = unstuff_next;
+      mrp->tmp |= tmp << mrp->bits;
+      mrp->bits += total_bits;
     }
 
     //************************************************************************/
@@ -981,29 +986,17 @@ namespace ojph {
             d0 = _mm256_or_si256(d0, d1);
 
             // find location of e_k and mask
-            __m256i shift, t0, t1, Uq0, Uq1;
+            __m256i shift;
             __m256i ones = _mm256_set1_epi16(1);
             __m256i twos = _mm256_set1_epi16(2);
             __m256i U_q_m1 = _mm256_sub_epi32(U_q_avx, ones);
-            Uq0 = _mm256_and_si256(U_q_m1, _mm256_set_epi32(0, 0, 0, 0x1F, 0, 0, 0, 0x1F));
-            Uq1 = _mm256_bsrli_epi128(U_q_m1, 14);
             w0 = _mm256_sub_epi16(twos, w0);
-            t0 = _mm256_and_si256(w0, _mm256_set_epi64x(0, -1, 0, -1));
-            t1 = _mm256_and_si256(w0, _mm256_set_epi64x(-1, 0, -1, 0));
-            {//no _mm256_sllv_epi16 in avx2
-                __m128i t_0_sse = _mm256_castsi256_si128(t0);
-                t_0_sse = _mm_sll_epi16(t_0_sse, _mm256_castsi256_si128(Uq0));
-                __m128i t_1_sse = _mm256_extracti128_si256(t0 , 0x1);
-                t_1_sse = _mm_sll_epi16(t_1_sse, _mm256_extracti128_si256(Uq0, 0x1));
-                t0 = _mm256_inserti128_si256(_mm256_castsi128_si256(t_0_sse), t_1_sse, 0x1);
-
-                t_0_sse = _mm256_castsi256_si128(t1);
-                t_0_sse = _mm_sll_epi16(t_0_sse, _mm256_castsi256_si128(Uq1));
-                t_1_sse = _mm256_extracti128_si256(t1, 0x1);
-                t_1_sse = _mm_sll_epi16(t_1_sse, _mm256_extracti128_si256(Uq1, 0x1));
-                t1 = _mm256_inserti128_si256(_mm256_castsi128_si256(t_0_sse), t_1_sse, 0x1);
-            }
-            shift = _mm256_or_si256(t0, t1);
+            // U_q_avx has the same U_q value in both 16-bit halves of each 32-bit lane,
+            // so each 32-bit lane of w0 holds two identical 16-bit shift targets (value
+            // 1 or 2).  Using _mm256_sllv_epi32 is valid because neither value can
+            // overflow its 16-bit half for any shift up to 14 (U_q-1 <= mmsbp2-1 < 15).
+            shift = _mm256_sllv_epi32(w0,
+                        _mm256_and_si256(U_q_m1, _mm256_set1_epi32(0xFFFF)));
             ms_vec = _mm256_and_si256(d0, _mm256_sub_epi16(shift, ones));
 
             // next e_1
