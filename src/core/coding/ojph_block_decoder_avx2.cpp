@@ -586,10 +586,10 @@ namespace ojph {
      */
     struct frwd_struct_avx2 {
       const ui8* data;  //!<pointer to bitstream
-      ui8 tmp[48];      //!<temporary buffer of read data + 16 extra
+      int size;         //!<size of data
       ui32 bits;        //!<number of bits stored in tmp
       ui32 unstuff;     //!<1 if a bit needs to be unstuffed from next byte
-      int size;         //!<size of data
+      ui8 tmp[48];      //!<temporary buffer of read data + 16 extra
     };
 
     //************************************************************************/
@@ -612,16 +612,17 @@ namespace ojph {
      */
     template<int X>
     static inline
-    void frwd_read(frwd_struct_avx2 *msp)
+    void frwd_read_impl(frwd_struct_avx2 *__restrict__ msp,
+                        const ui8*& data, int& size)
     {
       assert(msp->bits <= 128);
 
       __m128i offset, val, validity, all_xff;
-      val = _mm_loadu_si128((__m128i*)msp->data);
-      int bytes = msp->size >= 16 ? 16 : msp->size;
+      val = _mm_loadu_si128((__m128i*)data);
+      int bytes = size >= 16 ? 16 : size;
       validity = _mm_set1_epi8((char)bytes);
-      msp->data += bytes;
-      msp->size -= bytes;
+      data += bytes;
+      size -= bytes;
       int bits = 128;
       offset = _mm_set_epi64x(0x0F0E0D0C0B0A0908,0x0706050403020100);
       validity = _mm_cmpgt_epi8(validity, offset);
@@ -688,6 +689,13 @@ namespace ojph {
       msp->bits += (ui32)bits;
       msp->unstuff = next_unstuff;   // next unstuff
       assert(msp->unstuff == 0 || msp->unstuff == 1);
+    }
+
+    template<int X>
+    static inline
+    void frwd_read(frwd_struct_avx2 *msp)
+    {
+      frwd_read_impl<X>(msp, msp->data, msp->size);
     }
 
     //************************************************************************/
@@ -766,9 +774,13 @@ namespace ojph {
     {
       if (msp->bits <= 128)
       {
-        frwd_read<X>(msp);
-        if (msp->bits <= 128) //need to test
-          frwd_read<X>(msp);
+        const ui8* data = msp->data;
+        int size = msp->size;
+        frwd_read_impl<X>(msp, data, size);
+        if (__builtin_expect(msp->bits <= 128, 0)) //need to test
+          frwd_read_impl<X>(msp, data, size);
+        msp->data = data;
+        msp->size = size;
       }
       __m128i t = _mm_loadu_si128((__m128i*)msp->tmp);
       return t;
@@ -791,7 +803,7 @@ namespace ojph {
         __m256i flags = _mm256_and_si256(inf_u_q, _mm256_set_epi32(0x8880, 0x4440, 0x2220, 0x1110, 0x8880, 0x4440, 0x2220, 0x1110));
         __m256i insig = _mm256_cmpeq_epi32(flags, _mm256_setzero_si256());
 
-        if ((uint32_t)_mm256_movemask_epi8(insig) != (uint32_t)0xFFFFFFFF) //are all insignificant?
+        if (__builtin_expect((uint32_t)_mm256_movemask_epi8(insig) != (uint32_t)0xFFFFFFFF, 1)) //are all insignificant?
         {
             flags = _mm256_mullo_epi16(flags, _mm256_set_epi16(1, 1, 2, 2, 4, 4, 8, 8, 1, 1, 2, 2, 4, 4, 8, 8));
 
@@ -815,30 +827,16 @@ namespace ojph {
 
             __m128i ms_vec0 = _mm_setzero_si128();
             __m128i ms_vec1 = _mm_setzero_si128();
-            ui32 total_mn = (ui32)(total_mn1 + total_mn2);
-            if (total_mn1 > 0 && total_mn2 > 0
-                && total_mn1 < 64 && total_mn < 128)
-            {
-                __m128i ms_all = frwd_fetch<0xFF>(magsgn);
-                ms_vec0 = ms_all;
-                __m128i sh = _mm_set1_epi64x(total_mn1);
-                ms_vec1 = _mm_srl_epi64(ms_all, sh);
-                __m128i cross = _mm_srli_si128(ms_all, 8);
-                cross = _mm_sll_epi64(cross,
-                            _mm_set1_epi64x(64 - total_mn1));
-                ms_vec1 = _mm_or_si128(ms_vec1, cross);
-                frwd_advance(magsgn, total_mn);
+            // Use separate per-quad fetches so the predictor sees simple
+            // zero vs. non-zero tests instead of a 4-condition compound.
+            // frwd_fetch is near-free when bits > 128 (no refill needed).
+            if (__builtin_expect(total_mn1 > 0, 1)) {
+                ms_vec0 = frwd_fetch<0xFF>(magsgn);
+                frwd_advance(magsgn, (ui32)total_mn1);
             }
-            else
-            {
-                if (total_mn1) {
-                    ms_vec0 = frwd_fetch<0xFF>(magsgn);
-                    frwd_advance(magsgn, (ui32)total_mn1);
-                }
-                if (total_mn2) {
-                    ms_vec1 = frwd_fetch<0xFF>(magsgn);
-                    frwd_advance(magsgn, (ui32)total_mn2);
-                }
+            if (__builtin_expect(total_mn2 > 0, 1)) {
+                ms_vec1 = frwd_fetch<0xFF>(magsgn);
+                frwd_advance(magsgn, (ui32)total_mn2);
             }
 
             __m256i ms_vec = _mm256_inserti128_si256(_mm256_castsi128_si256(ms_vec0), ms_vec1, 0x1);
@@ -933,7 +931,7 @@ namespace ojph {
                              (si16)0x8880, 0x4440, 0x2220, 0x1110,
                              (si16)0x8880, 0x4440, 0x2220, 0x1110));
         insig = _mm256_cmpeq_epi16(flags, _mm256_setzero_si256());
-        if ((uint32_t)_mm256_movemask_epi8(insig) != (uint32_t)0xFFFFFFFF) //are all insignificant?
+        if (__builtin_expect((uint32_t)_mm256_movemask_epi8(insig) != (uint32_t)0xFFFFFFFF, 1)) //are all insignificant?
         {
             ddd = _mm_or_si128(_mm_bslli_si128(U_q, 2), U_q);
             __m256i U_q_avx = _mm256_permutevar8x32_epi32(_mm256_castsi128_si256(ddd),
@@ -962,30 +960,13 @@ namespace ojph {
 
             __m128i ms_vec0 = _mm_setzero_si128();
             __m128i ms_vec1 = _mm_setzero_si128();
-            ui32 total_mn = (ui32)(total_mn1 + total_mn2);
-            if (total_mn1 > 0 && total_mn2 > 0
-                && total_mn1 < 64 && total_mn < 128)
-            {
-                __m128i ms_all = frwd_fetch<0xFF>(magsgn);
-                ms_vec0 = ms_all;
-                __m128i sh = _mm_set1_epi64x(total_mn1);
-                ms_vec1 = _mm_srl_epi64(ms_all, sh);
-                __m128i cross = _mm_srli_si128(ms_all, 8);
-                cross = _mm_sll_epi64(cross,
-                            _mm_set1_epi64x(64 - total_mn1));
-                ms_vec1 = _mm_or_si128(ms_vec1, cross);
-                frwd_advance(magsgn, total_mn);
+            if (__builtin_expect(total_mn1 > 0, 1)) {
+                ms_vec0 = frwd_fetch<0xFF>(magsgn);
+                frwd_advance(magsgn, (ui32)total_mn1);
             }
-            else
-            {
-                if (total_mn1) {
-                    ms_vec0 = frwd_fetch<0xFF>(magsgn);
-                    frwd_advance(magsgn, (ui32)total_mn1);
-                }
-                if (total_mn2) {
-                    ms_vec1 = frwd_fetch<0xFF>(magsgn);
-                    frwd_advance(magsgn, (ui32)total_mn2);
-                }
+            if (__builtin_expect(total_mn2 > 0, 1)) {
+                ms_vec1 = frwd_fetch<0xFF>(magsgn);
+                frwd_advance(magsgn, (ui32)total_mn2);
             }
 
             __m256i ms_vec = _mm256_inserti128_si256(_mm256_castsi128_si256(ms_vec0), ms_vec1, 0x1);
@@ -1193,7 +1174,7 @@ namespace ojph {
       // Each entry in UVLC contains u_q
       // One extra row to handle the case of SPP propagating downwards
       // when codeblock width is 4
-      ui16 scratch[8 * 513] = {0};          // 8+ kB
+      ui16 scratch[8 * 513];                 // 8+ kB
 
       // We need an extra two entries (one inf and one u_q) beyond
       // the last column.
@@ -1204,6 +1185,20 @@ namespace ojph {
       ui32 sstr = ((width + 2u) + 7u) & ~7u; // multiples of 8
 
       assert((stride & 0x3) == 0);
+
+      // The emax SIMD loop uses x < width, so for width >= 16 reads stay
+      // within the entries written by step 1.  For width < 16 the single
+      // x=0 SIMD read (16 ui16) extends into guard entries and, for width=4,
+      // crosses into the extra row; zero only those entries explicitly.
+      if (width < 16)
+      {
+        const ui32 guard        = sstr - width;
+        const ui32 written_rows = height >> 1;
+        for (ui32 r = 0; r < written_rows; r++)
+          memset(scratch + r * sstr + width, 0, guard * sizeof(ui16));
+        if (width == 4) // x=0 read crosses into extra row when sstr=8
+          memset(scratch + written_rows * sstr, 0, sstr * sizeof(ui16));
+      }
 
       ui32 mmsbp2 = missing_msbs + 2;
 
@@ -1523,7 +1518,7 @@ namespace ojph {
             const __m256i avx_1 = _mm256_set1_epi32(1);
             const __m256i avx_0 = _mm256_setzero_si256();
 
-            for (ui32 x = 0; x <= width; x += 16, vp += 8, sp += 16) {
+            for (ui32 x = 0; x < width; x += 16, vp += 8, sp += 16) {
               __m256i v = _mm256_loadu_si256((__m256i*)vp);
               __m256i v_p1 = _mm256_loadu_si256((__m256i*)(vp + 1));
               v = _mm256_or_si256(v, v_p1);
@@ -1637,7 +1632,7 @@ namespace ojph {
             const __m256i avx_1 = _mm256_set1_epi32(1);
             const __m256i avx_0 = _mm256_setzero_si256();
 
-            for (ui32 x = 0; x <= width; x += 16, vp += 8, sp += 16, vp_32 += 8) {
+            for (ui32 x = 0; x < width; x += 16, vp += 8, sp += 16, vp_32 += 8) {
               __m128i v = _mm_loadu_si128((__m128i*)vp);
               __m128i v_p1 = _mm_loadu_si128((__m128i*)(vp + 1));
               v = _mm_or_si128(v, v_p1);
